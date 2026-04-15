@@ -1,14 +1,15 @@
 import express from "express";
 import axios from "axios";
 import fs from "fs";
+import multer from "multer";
 import { exec } from "child_process";
 
 const app = express();
-app.use(express.json());
+const upload = multer({ dest: "uploads/" });
 
 const PORT = process.env.PORT || 3000;
 
-// download helper
+// скачать файл по ссылке
 async function downloadFile(url, path) {
   const response = await axios({
     method: "GET",
@@ -29,38 +30,52 @@ app.get("/", (req, res) => {
   res.send("FFmpeg service is running");
 });
 
-app.post("/render", async (req, res) => {
-  const { video_url, audio_url } = req.body;
+app.post("/render", upload.single("audio_file"), async (req, res) => {
+  const videoUrl = req.body.video_url;
 
-  if (!video_url || !audio_url) {
-    return res.status(400).json({ error: "Missing video_url or audio_url" });
+  if (!videoUrl) {
+    return res.status(400).json({ error: "Missing video_url" });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: "Missing audio_file" });
   }
 
   const videoPath = "video.mp4";
-  const audioPath = "audio.mp3";
+  const audioPath = req.file.path;
   const outputPath = "final.mp4";
 
   try {
-    await downloadFile(video_url, videoPath);
-    await downloadFile(audio_url, audioPath);
+    // скачать видео по ссылке
+    await downloadFile(videoUrl, videoPath);
 
-    const command = `ffmpeg -y -i ${videoPath} -i ${audioPath} -filter_complex "scale=1080:-1,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -c:a aac -shortest ${outputPath}`;
+    // собрать вертикальное видео с аудио
+    const command = `ffmpeg -y -i ${videoPath} -i ${audioPath} -filter_complex "scale=1080:-1:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -c:a aac -shortest ${outputPath}`;
 
     exec(command, (error) => {
       if (error) {
         console.error(error);
+
+        if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+
         return res.status(500).json({ error: "FFmpeg failed" });
       }
 
       res.sendFile(process.cwd() + "/" + outputPath, () => {
-        fs.unlinkSync(videoPath);
-        fs.unlinkSync(audioPath);
-        fs.unlinkSync(outputPath);
+        if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
       });
     });
-
   } catch (err) {
     console.error(err);
+
+    if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+    if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+
     res.status(500).json({ error: "Processing failed" });
   }
 });
