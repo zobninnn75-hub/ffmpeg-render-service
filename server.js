@@ -8,7 +8,6 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 3000;
-
 const TEMP_DIR = '/tmp';
 
 function downloadFile(url, outputPath) {
@@ -35,16 +34,25 @@ function runFFmpeg(videoPath, audioPath, outputPath) {
   return new Promise((resolve, reject) => {
     const args = [
       '-y',
+
+      // 🔥 зацикливаем видео
+      '-stream_loop', '-1',
       '-i', videoPath,
+
+      // аудио
       '-i', audioPath,
 
-      // 🔥 ВАЖНО: НЕ трогаем видео вообще
+      // видео не трогаем
       '-c:v', 'copy',
 
-      // аудио приводим к нормальному формату
+      // нормальный звук
       '-c:a', 'aac',
 
-      // длина по короткому
+      // явно указываем дорожки
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+
+      // режем по длине аудио
       '-shortest',
 
       outputPath,
@@ -62,7 +70,7 @@ function runFFmpeg(videoPath, audioPath, outputPath) {
 
 app.post('/render', async (req, res) => {
   try {
-    const { video_url, audio_url, task_id } = req.body;
+    const { video_url, audio_url } = req.body;
 
     if (!video_url || !audio_url) {
       return res.status(400).json({
@@ -86,7 +94,6 @@ app.post('/render', async (req, res) => {
     console.log('Sending result...');
 
     res.sendFile(outputPath, () => {
-      // очистка
       fs.unlink(videoPath, () => {});
       fs.unlink(audioPath, () => {});
       fs.unlink(outputPath, () => {});
