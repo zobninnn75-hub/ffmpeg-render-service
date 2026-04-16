@@ -35,24 +35,26 @@ function runFFmpeg(videoPath, audioPath, outputPath) {
     const args = [
       '-y',
 
-      // 🔥 зацикливаем видео
+      // Зацикливаем видео
       '-stream_loop', '-1',
       '-i', videoPath,
 
-      // аудио
+      // Подключаем аудио
       '-i', audioPath,
 
-      // видео не трогаем
-      '-c:v', 'copy',
+      // Перекодируем видео в H.264 с хорошим балансом качества/веса
+      '-c:v', 'libx264',
+      '-crf', '22',
+      '-preset', 'veryfast',
 
-      // нормальный звук
+      // Аудио в AAC для совместимости с mp4/Telegram
       '-c:a', 'aac',
 
-      // явно указываем дорожки
+      // Явно берём видео из 1-го входа и аудио из 2-го
       '-map', '0:v:0',
       '-map', '1:a:0',
 
-      // режем по длине аудио
+      // Длина итогового ролика = длина аудио
       '-shortest',
 
       outputPath,
@@ -78,9 +80,10 @@ app.post('/render', async (req, res) => {
       });
     }
 
-    const videoPath = path.join(TEMP_DIR, `video_${Date.now()}.mp4`);
-    const audioPath = path.join(TEMP_DIR, `audio_${Date.now()}.mp3`);
-    const outputPath = path.join(TEMP_DIR, `output_${Date.now()}.mp4`);
+    const timestamp = Date.now();
+    const videoPath = path.join(TEMP_DIR, `video_${timestamp}.mp4`);
+    const audioPath = path.join(TEMP_DIR, `audio_${timestamp}.mp3`);
+    const outputPath = path.join(TEMP_DIR, `output_${timestamp}.mp4`);
 
     console.log('Downloading video...');
     await downloadFile(video_url, videoPath);
@@ -92,7 +95,6 @@ app.post('/render', async (req, res) => {
     await runFFmpeg(videoPath, audioPath, outputPath);
 
     console.log('Sending result...');
-
     res.sendFile(outputPath, () => {
       fs.unlink(videoPath, () => {});
       fs.unlink(audioPath, () => {});
