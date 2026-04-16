@@ -62,8 +62,8 @@ app.post("/render", async (req, res) => {
     await downloadFile(videoUrl, videoPath);
     await downloadFile(audioUrl, audioPath);
 
-    // собрать вертикальное видео с аудио
-    const command = `ffmpeg -y -i "${videoPath}" -i "${audioPath}" -filter_complex "scale=1080:-1:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -c:a aac -shortest "${outputPath}"`;
+    // зациклить короткое видео до конца аудио и собрать вертикальный ролик
+    const command = `ffmpeg -y -stream_loop -1 -i "${videoPath}" -i "${audioPath}" -filter_complex "[0:v]scale=1080:-1:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v]" -map "[v]" -map 1:a -c:v libx264 -c:a aac -shortest "${outputPath}"`;
 
     exec(command, (error) => {
       if (error) {
