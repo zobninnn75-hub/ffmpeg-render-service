@@ -1,13 +1,13 @@
 import express from "express";
 import axios from "axios";
 import fs from "fs";
-import multer from "multer";
 import { exec } from "child_process";
 
 const app = express();
-const upload = multer({ dest: "uploads/" });
 
 const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
 
 // скачать файл по ссылке
 async function downloadFile(url, path) {
@@ -26,57 +26,60 @@ async function downloadFile(url, path) {
   });
 }
 
+function cleanup(...paths) {
+  for (const path of paths) {
+    if (fs.existsSync(path)) {
+      fs.unlinkSync(path);
+    }
+  }
+}
+
 app.get("/", (req, res) => {
   res.send("FFmpeg service is running");
 });
 
-app.post("/render", upload.single("audio_file"), async (req, res) => {
+app.post("/render", async (req, res) => {
   const videoUrl = req.body.video_url;
+  const audioUrl = req.body.audio_url;
+  const taskId = req.body.task_id || "render";
 
   if (!videoUrl) {
     return res.status(400).json({ error: "Missing video_url" });
   }
 
-  if (!req.file) {
-    return res.status(400).json({ error: "Missing audio_file" });
+  if (!audioUrl) {
+    return res.status(400).json({ error: "Missing audio_url" });
   }
 
-  const videoPath = "video.mp4";
-  const audioPath = req.file.path;
-  const outputPath = "final.mp4";
+  const safeTaskId = String(taskId).replace(/[^a-zA-Z0-9_-]/g, "_");
+
+  const videoPath = `${safeTaskId}_video.mp4`;
+  const audioPath = `${safeTaskId}_audio.mp3`;
+  const outputPath = `${safeTaskId}_final.mp4`;
 
   try {
-    // скачать видео по ссылке
+    // скачать видео и аудио по ссылкам
     await downloadFile(videoUrl, videoPath);
+    await downloadFile(audioUrl, audioPath);
 
     // собрать вертикальное видео с аудио
-    const command = `ffmpeg -y -i ${videoPath} -i ${audioPath} -filter_complex "scale=1080:-1:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -c:a aac -shortest ${outputPath}`;
+    const command = `ffmpeg -y -i "${videoPath}" -i "${audioPath}" -filter_complex "scale=1080:-1:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -c:a aac -shortest "${outputPath}"`;
 
     exec(command, (error) => {
       if (error) {
         console.error(error);
-
-        if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
-        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-
+        cleanup(videoPath, audioPath, outputPath);
         return res.status(500).json({ error: "FFmpeg failed" });
       }
 
-      res.sendFile(process.cwd() + "/" + outputPath, () => {
-        if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
-        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+      res.sendFile(`${process.cwd()}/${outputPath}`, () => {
+        cleanup(videoPath, audioPath, outputPath);
       });
     });
   } catch (err) {
     console.error(err);
-
-    if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
-    if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-
-    res.status(500).json({ error: "Processing failed" });
+    cleanup(videoPath, audioPath, outputPath);
+    return res.status(500).json({ error: "Processing failed" });
   }
 });
 
