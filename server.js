@@ -1,86 +1,109 @@
-import express from "express";
-import axios from "axios";
-import fs from "fs";
-import { exec } from "child_process";
+import express from 'express';
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
+import { execFile } from 'child_process';
 
 const app = express();
+app.use(express.json({ limit: '50mb' }));
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+const TEMP_DIR = '/tmp';
 
-// скачать файл по ссылке
-async function downloadFile(url, path) {
-  const response = await axios({
-    method: "GET",
-    url,
-    responseType: "stream"
-  });
+function downloadFile(url, outputPath) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const response = await axios({
+        method: 'GET',
+        url,
+        responseType: 'stream',
+      });
 
-  const writer = fs.createWriteStream(path);
-  response.data.pipe(writer);
+      const writer = fs.createWriteStream(outputPath);
+      response.data.pipe(writer);
 
-  return new Promise((resolve, reject) => {
-    writer.on("finish", resolve);
-    writer.on("error", reject);
-  });
-}
-
-function cleanup(...paths) {
-  for (const path of paths) {
-    if (fs.existsSync(path)) {
-      fs.unlinkSync(path);
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    } catch (err) {
+      reject(err);
     }
-  }
+  });
 }
 
-app.get("/", (req, res) => {
-  res.send("FFmpeg service is running");
+function runFFmpeg(videoPath, audioPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-y',
+      '-i', videoPath,
+      '-i', audioPath,
+
+      // 🔥 ВАЖНО: НЕ трогаем видео вообще
+      '-c:v', 'copy',
+
+      // аудио приводим к нормальному формату
+      '-c:a', 'aac',
+
+      // длина по короткому
+      '-shortest',
+
+      outputPath,
+    ];
+
+    execFile('ffmpeg', args, (error, stdout, stderr) => {
+      if (error) {
+        console.error('FFmpeg error:', stderr);
+        return reject(error);
+      }
+      resolve();
+    });
+  });
+}
+
+app.post('/render', async (req, res) => {
+  try {
+    const { video_url, audio_url, task_id } = req.body;
+
+    if (!video_url || !audio_url) {
+      return res.status(400).json({
+        error: 'video_url and audio_url are required',
+      });
+    }
+
+    const videoPath = path.join(TEMP_DIR, `video_${Date.now()}.mp4`);
+    const audioPath = path.join(TEMP_DIR, `audio_${Date.now()}.mp3`);
+    const outputPath = path.join(TEMP_DIR, `output_${Date.now()}.mp4`);
+
+    console.log('Downloading video...');
+    await downloadFile(video_url, videoPath);
+
+    console.log('Downloading audio...');
+    await downloadFile(audio_url, audioPath);
+
+    console.log('Running ffmpeg...');
+    await runFFmpeg(videoPath, audioPath, outputPath);
+
+    console.log('Sending result...');
+
+    res.sendFile(outputPath, () => {
+      // очистка
+      fs.unlink(videoPath, () => {});
+      fs.unlink(audioPath, () => {});
+      fs.unlink(outputPath, () => {});
+    });
+
+  } catch (error) {
+    console.error('Processing failed:', error);
+
+    res.status(500).json({
+      error: 'Processing failed',
+      details: error.message,
+    });
+  }
 });
 
-app.post("/render", async (req, res) => {
-  const videoUrl = req.body.video_url;
-  const audioUrl = req.body.audio_url;
-  const taskId = req.body.task_id || "render";
-
-  if (!videoUrl) {
-    return res.status(400).json({ error: "Missing video_url" });
-  }
-
-  if (!audioUrl) {
-    return res.status(400).json({ error: "Missing audio_url" });
-  }
-
-  const safeTaskId = String(taskId).replace(/[^a-zA-Z0-9_-]/g, "_");
-
-  const videoPath = `${safeTaskId}_video.mp4`;
-  const audioPath = `${safeTaskId}_audio.mp3`;
-  const outputPath = `${safeTaskId}_final.mp4`;
-
-  try {
-    // скачать видео и аудио по ссылкам
-    await downloadFile(videoUrl, videoPath);
-    await downloadFile(audioUrl, audioPath);
-
-    // зациклить короткое видео до конца аудио и собрать вертикальный ролик
-    const command = `ffmpeg -y -stream_loop -1 -i "${videoPath}" -i "${audioPath}" -filter_complex "[0:v]scale=1080:-1:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[v]" -map "[v]" -map 1:a -c:v libx264 -c:a aac -shortest "${outputPath}"`;
-
-    exec(command, (error) => {
-      if (error) {
-        console.error(error);
-        cleanup(videoPath, audioPath, outputPath);
-        return res.status(500).json({ error: "FFmpeg failed" });
-      }
-
-      res.sendFile(`${process.cwd()}/${outputPath}`, () => {
-        cleanup(videoPath, audioPath, outputPath);
-      });
-    });
-  } catch (err) {
-    console.error(err);
-    cleanup(videoPath, audioPath, outputPath);
-    return res.status(500).json({ error: "Processing failed" });
-  }
+app.get('/', (req, res) => {
+  res.send('FFmpeg render service is running');
 });
 
 app.listen(PORT, () => {
